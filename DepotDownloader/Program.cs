@@ -117,7 +117,7 @@ namespace DepotDownloader
 
                         if (fileEntry.StartsWith(RegexPrefix))
                         {
-                            var rgx = new Regex(fileEntry[RegexPrefix.Length..], RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                            var rgx = new Regex(fileEntry[RegexPrefix.Length..], RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(30));
                             ContentDownloader.Config.FilesToDownloadRegex.Add(rgx);
                         }
                         else

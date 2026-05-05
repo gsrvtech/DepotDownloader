@@ -714,10 +714,16 @@ namespace DepotDownloader
 
             Console.WriteLine("Use the Steam Mobile App to sign in with this QR code:");
 
+            // Ensure Unicode block characters are displayed correctly on all platforms
+            var previousEncoding = Console.OutputEncoding;
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+
             foreach (var line in qrCodeAsAsciiArt)
             {
                 Console.WriteLine(line);
             }
+
+            Console.OutputEncoding = previousEncoding;
         }
     }
 }

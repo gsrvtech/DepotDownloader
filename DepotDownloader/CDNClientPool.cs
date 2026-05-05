@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using SteamKit2.CDN;
 
@@ -65,7 +66,7 @@ namespace DepotDownloader
 
         public Server GetConnection()
         {
-            return servers[nextServer % servers.Count];
+            return servers[(int)((uint)Interlocked.Increment(ref nextServer) % (uint)servers.Count)];
         }
 
         public void ReturnConnection(Server server)
@@ -79,15 +80,7 @@ namespace DepotDownloader
         {
             if (server == null) return;
 
-            lock (servers)
-            {
-                if (servers[nextServer % servers.Count] == server)
-                {
-                    nextServer++;
-
-                    // TODO: Add server to ContentServerPenalty
-                }
-            }
+            // TODO: Add server to ContentServerPenalty
         }
     }
 }
