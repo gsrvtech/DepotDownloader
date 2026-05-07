@@ -20,6 +20,8 @@ env:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       ref: ${{ steps.resolve.outputs.ref }}
     steps:
@@ -31,6 +33,21 @@ jobs:
             TAG="v$TAG"
           fi
           echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+
+      - name: Create and push tag if it does not exist
+        run: |
+          TAG="${{ steps.resolve.outputs.ref }}"
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists, skipping."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "Tag $TAG created and pushed."
+          fi
 
   build:
     needs: [prepare]
