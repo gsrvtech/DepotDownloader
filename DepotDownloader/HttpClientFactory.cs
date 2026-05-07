@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using SteamKit2;
 
 namespace DepotDownloader
 {
@@ -14,12 +15,20 @@ namespace DepotDownloader
     // We don't know if the IPv6 stack is functional.
     class HttpClientFactory
     {
-        public static HttpClient CreateHttpClient()
+        // Shared long-lived client for CDN web file downloads (avoids socket exhaustion from per-request instantiation).
+        public static readonly HttpClient CdnClient = CreateHttpClient(HttpClientPurpose.CDN);
+
+        public static HttpClient CreateHttpClient(HttpClientPurpose purpose = HttpClientPurpose.WebAPI)
         {
             var client = new HttpClient(new SocketsHttpHandler
             {
                 ConnectCallback = IPv4ConnectAsync
             });
+
+            // Use a longer response timeout for CDN content downloads, which can be large and slow.
+            client.Timeout = purpose == HttpClientPurpose.CDN
+                ? System.TimeSpan.FromSeconds(300)
+                : System.TimeSpan.FromSeconds(30);
 
             var assemblyVersion = typeof(HttpClientFactory).Assembly.GetName().Version.ToString(fieldCount: 3);
             client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("DepotDownloader", assemblyVersion));

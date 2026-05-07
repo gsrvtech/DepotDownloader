@@ -155,6 +155,13 @@ namespace DepotDownloader
             }
 
             ContentDownloader.Config.MaxDownloads = GetParameter(args, "-max-downloads", 8);
+
+            if (ContentDownloader.Config.MaxDownloads < 1 || ContentDownloader.Config.MaxDownloads > 50)
+            {
+                Console.WriteLine("Error: -max-downloads must be between 1 and 50.");
+                return 1;
+            }
+
             ContentDownloader.Config.LoginID = HasParameter(args, "-loginid") ? GetParameter<uint>(args, "-loginid") : null;
 
             #endregion
@@ -163,6 +170,12 @@ namespace DepotDownloader
             if (appId == ContentDownloader.INVALID_APP_ID)
             {
                 Console.WriteLine("Error: -app not specified!");
+                return 1;
+            }
+
+            if (appId == 0)
+            {
+                Console.WriteLine("Error: -app must be a non-zero AppID.");
                 return 1;
             }
 
@@ -305,6 +318,17 @@ namespace DepotDownloader
                 else
                 {
                     depotManifestIds.AddRange(depotIdList.Select(depotId => (depotId, ContentDownloader.INVALID_MANIFEST_ID)));
+                }
+
+                if (depotIdList.Any(d => d == 0))
+                {
+                    Console.WriteLine("Error: -depot must not be 0.");
+                    return 1;
+                }
+
+                if (manifestIdList.Any(m => m == 0))
+                {
+                    Console.WriteLine("Warning: A manifest ID of 0 was specified. This may produce unexpected results.");
                 }
 
                 PrintUnconsumedArgs(args);

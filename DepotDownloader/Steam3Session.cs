@@ -64,7 +64,7 @@ namespace DepotDownloader
 
             var clientConfiguration = SteamConfiguration.Create(config =>
                 config
-                    .WithHttpClientFactory(static purpose => HttpClientFactory.CreateHttpClient())
+                    .WithHttpClientFactory(static purpose => HttpClientFactory.CreateHttpClient(purpose))
             );
 
             this.steamClient = new SteamClient(clientConfiguration);
@@ -350,6 +350,34 @@ namespace DepotDownloader
             throw new Exception($"EResult {(int)details.Result} ({details.Result}) while retrieving file details for pubfile {pubFile}.");
         }
 
+        public async Task<List<PublishedFileDetails>> GetPublishedFileDetailsBatchAsync(uint appId, IEnumerable<ulong> publishedFileIds)
+        {
+            const int batchSize = 100;
+            var allIds = publishedFileIds.ToList();
+            var results = new List<PublishedFileDetails>(allIds.Count);
+
+            for (var i = 0; i < allIds.Count; i += batchSize)
+            {
+                var pubFileRequest = new CPublishedFile_GetDetails_Request
+                {
+                    appid = appId,
+                    includechildren = true,
+                };
+                var end = Math.Min(i + batchSize, allIds.Count);
+                for (var j = i; j < end; j++)
+                    pubFileRequest.publishedfileids.Add(allIds[j]);
+
+                var details = await steamPublishedFile.GetDetails(pubFileRequest);
+
+                if (details.Result == EResult.OK)
+                    results.AddRange(details.Body.publishedfiledetails);
+                else
+                    throw new Exception($"EResult {(int)details.Result} ({details.Result}) while retrieving batch file details for app {appId}.");
+            }
+
+            return results;
+        }
+
 
         public async Task<SteamCloud.UGCDetailsCallback> GetUGCDetails(UGCHandle ugcHandle)
         {
@@ -583,7 +611,8 @@ namespace DepotDownloader
                     Console.WriteLine("Lost connection to Steam. Reconnecting");
                 }
 
-                Thread.Sleep(1000 * connectionBackoff);
+                var delay = Math.Min(1000 * (1 << (connectionBackoff - 1)), 30000);
+                Thread.Sleep(delay);
 
                 // Any connection related flags need to be reset here to match the state after Connect
                 ResetConnectionFlags();
@@ -656,8 +685,8 @@ namespace DepotDownloader
 
             if (loggedOn.Result == EResult.ServiceUnavailable)
             {
-                Console.WriteLine("Unable to login to Steam3: {0}", loggedOn.Result);
-                Abort(false);
+                Console.WriteLine("Steam3 unavailable ({0}). Reconnecting...", loggedOn.Result);
+                Reconnect();
 
                 return;
             }

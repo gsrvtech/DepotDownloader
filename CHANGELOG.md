@@ -7,6 +7,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1]
+
+### Added
+- `ConsoleAuthenticator`: Clearer error message when a 2FA code is incorrect (including a note that a new code has been sent for email auth).
+- `ConsoleAuthenticator`: Maximum of 3 attempts for 2FA codes; login is aborted after the limit is exceeded.
+- `ConsoleAuthenticator`: Added hint to use `-no-mobile` in the Steam Mobile App confirmation prompt.
+- `Program`: Per-file completion line now shows download speed (MB/s) and estimated time remaining (ETA mm:ss).
+
+### Changed
+- `HttpClientFactory`: Now accepts and acts on the `HttpClientPurpose` parameter passed by SteamKit2's `WithHttpClientFactory`. CDN connections use a 300-second timeout; all other connections use 30 seconds.
+- `Util`: Replaced the hand-rolled `AdlerHash(Stream, int)` implementation with `SteamKit2.CDN.DepotChunk.AdlerHash(ReadOnlySpan<byte>)`, which is SteamKit2's optimized unrolled variant. The `uint` result is now compared directly against `ChunkData.Checksum` (also `uint`), removing the `BitConverter.GetBytes` round-trip.
+- `Program`: `-max-downloads` is now validated (1–50); values outside this range exit with an error message.
+- `Program`: `-app 0` is now rejected as invalid.
+- `Program`: `-depot 0` is now rejected as invalid.
+- `Program`: A manifest ID of `0` now produces a warning.
+
+### Fixed
+
+- `ContentDownloader`: Workshop web file downloads (`DownloadWebFile`) now use `HttpClientPurpose.CDN`, applying the 300-second timeout instead of the 30-second WebAPI timeout.
+- `ContentDownloader`: `DownloadWebFile` now uses `GetAsync` + `EnsureSuccessStatusCode()` to surface HTTP error responses (e.g. 403, 404) as exceptions instead of silently writing an empty file.
+- `ContentDownloader`: `DownloadWebFile` now retries up to 5 times on failure with `min(500 * attempt, 10000) ms` backoff, consistent with chunk download behavior.
+- `ContentDownloader`: Workshop collections now batch-fetch all children's details in a single Steam API call (`GetPublishedFileDetailsBatchAsync`) instead of one request per child, reducing latency for large collections.
+- `ContentDownloader`: Workshop collection children are now processed in parallel (`Task.WhenAll`) instead of sequentially, reducing total processing time for large collections.
+- `ContentDownloader`: Workshop web file downloads in `DownloadPubfileAsync` are now run concurrently, limited to `MaxDownloads` parallel downloads (same semaphore used for chunk downloads).
+- `HttpClientFactory`: Added shared static `CdnClient` instance for workshop web file downloads, eliminating per-request `HttpClient` instantiation and enabling TCP connection reuse.
+- `Steam3Session`: `GetPublishedFileDetailsBatchAsync` now chunks requests into batches of 100 IDs to avoid hitting Steam API limits with very large collections.
+- `ContentDownloader`: Workshop collection traversal now tracks visited published file IDs using a `ConcurrentDictionary`. Cycles (A → B → A) and cross-references that would otherwise trigger redundant parallel API bursts up to the depth limit are detected and skipped immediately. This prevents a malformed or malicious collection from causing an exponential fan-out of Steam API requests.
+- `Steam3Session`: `EResult.ServiceUnavailable` during login now triggers a reconnect instead of aborting, preventing unnecessary download failures when Steam CM servers are temporarily overloaded.
+- `Steam3Session`: Connection retry delay now uses exponential backoff (`min(1000 * 2^(n-1), 30000) ms`) instead of a linear `1000 * n ms` ramp, reducing hammering of CM servers under sustained load.
+- `ContentDownloader`: Chunk downloads now retry up to 10 times before giving up (previously retried indefinitely). Each retry waits `min(500 * attempt, 10000) ms` with exponential backoff to avoid flooding CDN servers.
+- `ContentDownloader`: Retry log messages for chunk downloads now include the current attempt and maximum (`attempt N/10`) for easier diagnosis.
+
 ## [3.5.0]
 
 ### Security

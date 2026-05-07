@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Channels;
@@ -364,8 +365,14 @@ namespace DepotDownloader
 
             steam3.Disconnect();
         }
-        private static async Task ProcessPublishedFileAsync(uint appId, ulong publishedFileId, List<(string filename, string url)> fileUrls, List<ulong> contentFileIds, int depth = 0)
+        private static async Task ProcessPublishedFileAsync(uint appId, ulong publishedFileId, ConcurrentBag<(string filename, string url)> fileUrls, ConcurrentBag<ulong> contentFileIds, ConcurrentDictionary<ulong, byte> visited, int depth = 0)
         {
+            if (!visited.TryAdd(publishedFileId, 0))
+            {
+                Console.WriteLine("Warning: Cycle or duplicate detected for published file {0}. Skipping.", publishedFileId);
+                return;
+            }
+
             if (depth > 30)
             {
                 Console.WriteLine("Warning: Published file collection nesting limit reached for file {0}", publishedFileId);
@@ -373,14 +380,34 @@ namespace DepotDownloader
             }
 
             var details = await steam3.GetPublishedFileDetails(appId, publishedFileId);
+            await ProcessPublishedFileDetailsAsync(appId, details, fileUrls, contentFileIds, visited, depth);
+        }
+
+        private static async Task ProcessPublishedFileDetailsAsync(uint appId, SteamKit2.Internal.PublishedFileDetails details, ConcurrentBag<(string filename, string url)> fileUrls, ConcurrentBag<ulong> contentFileIds, ConcurrentDictionary<ulong, byte> visited, int depth)
+        {
+            if (depth > 30)
+            {
+                Console.WriteLine("Warning: Published file collection nesting limit reached for file {0}", details.publishedfileid);
+                return;
+            }
+
             var fileType = (EWorkshopFileType)details.file_type;
 
             if (fileType == EWorkshopFileType.Collection)
             {
-                foreach (var child in details.children)
-                {
-                    await ProcessPublishedFileAsync(appId, child.publishedfileid, fileUrls, contentFileIds, depth + 1);
-                }
+                if (details.children.Count == 0) return;
+
+                var unvisitedChildIds = details.children
+                    .Select(c => c.publishedfileid)
+                    .Where(id => !visited.ContainsKey(id))
+                    .ToList();
+
+                if (unvisitedChildIds.Count == 0) return;
+
+                var childDetailsList = await steam3.GetPublishedFileDetailsBatchAsync(appId, unvisitedChildIds);
+
+                await Task.WhenAll(childDetailsList.Select(childDetail =>
+                    ProcessPublishedFileDetailsAsync(appId, childDetail, fileUrls, contentFileIds, visited, depth + 1)));
             }
             else if (SupportedWorkshopFileTypes.Contains(fileType))
             {
@@ -394,27 +421,32 @@ namespace DepotDownloader
                 }
                 else
                 {
-                    Console.WriteLine("Unable to locate manifest ID for published file {0}", publishedFileId);
+                    Console.WriteLine("Unable to locate manifest ID for published file {0}", details.publishedfileid);
                 }
             }
             else
             {
-                Console.WriteLine("Published file {0} has unsupported file type {1}. Skipping file", publishedFileId, fileType);
+                Console.WriteLine("Published file {0} has unsupported file type {1}. Skipping file", details.publishedfileid, fileType);
             }
         }
 
         public static async Task DownloadPubfileAsync(uint appId, ulong publishedFileId)
         {
-            List<(string filename, string url)> fileUrls = new();
-            List<ulong> contentFileIds = new();
+            ConcurrentBag<(string filename, string url)> fileUrlsBag = new();
+            ConcurrentBag<ulong> contentFileIdsBag = new();
+            ConcurrentDictionary<ulong, byte> visited = new();
 
-            await ProcessPublishedFileAsync(appId, publishedFileId, fileUrls, contentFileIds);
+            await ProcessPublishedFileAsync(appId, publishedFileId, fileUrlsBag, contentFileIdsBag, visited);
 
-            foreach (var (filename, url) in fileUrls)
+            var semaphore = new SemaphoreSlim(Config.MaxDownloads);
+            await Task.WhenAll(fileUrlsBag.Select(async item =>
             {
-                await DownloadWebFile(appId, filename, url);
-            }
+                await semaphore.WaitAsync();
+                try { await DownloadWebFile(appId, item.filename, item.url); }
+                finally { semaphore.Release(); }
+            }));
 
+            var contentFileIds = contentFileIdsBag.ToList();
             if (contentFileIds.Count > 0)
             {
                 var depotManifestIds = contentFileIds.Select(id => (appId, id)).ToList();
@@ -463,12 +495,26 @@ namespace DepotDownloader
             Directory.CreateDirectory(Path.GetDirectoryName(fileFinalPath));
             Directory.CreateDirectory(Path.GetDirectoryName(fileStagingPath));
 
-            using (var file = File.OpenWrite(fileStagingPath))
-            using (var client = HttpClientFactory.CreateHttpClient())
+            const int maxRetries = 5;
+            for (var retryCount = 0; retryCount <= maxRetries; retryCount++)
             {
-                Console.WriteLine("Downloading {0}", fileName);
-                var responseStream = await client.GetStreamAsync(url);
-                await responseStream.CopyToAsync(file);
+                try
+                {
+                    using var file = File.Open(fileStagingPath, FileMode.Create, FileAccess.Write);
+                    var client = HttpClientFactory.CdnClient;
+                    Console.WriteLine("Downloading {0}", fileName);
+                    using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                    response.EnsureSuccessStatusCode();
+                    using var responseStream = await response.Content.ReadAsStreamAsync();
+                    await responseStream.CopyToAsync(file);
+                    break;
+                }
+                catch (Exception ex) when (retryCount < maxRetries)
+                {
+                    var delay = Math.Min(500 * (retryCount + 1), 10000);
+                    await Task.Delay(delay);
+                    Console.WriteLine("Retrying web file download for {0} (attempt {1}/{2}): {3}", fileName, retryCount + 2, maxRetries + 1, ex.Message);
+                }
             }
 
             if (File.Exists(fileFinalPath))
@@ -716,6 +762,7 @@ namespace DepotDownloader
             public ulong completeDownloadSize;
             public ulong totalBytesCompressed;
             public ulong totalBytesUncompressed;
+            public System.Diagnostics.Stopwatch downloadStopwatch = System.Diagnostics.Stopwatch.StartNew();
         }
 
         private class DepotDownloadCounter
@@ -1144,8 +1191,9 @@ namespace DepotDownloader
                             {
                                 fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
 
-                                var adler = Util.AdlerHash(fsOld, (int)match.OldChunk.UncompressedLength);
-                                if (!adler.SequenceEqual(BitConverter.GetBytes(match.OldChunk.Checksum)))
+                                var chunkBuffer = new byte[match.OldChunk.UncompressedLength];
+                                var chunkRead = fsOld.ReadAtLeast(chunkBuffer, chunkBuffer.Length, throwOnEndOfStream: false);
+                                if (SteamKit2.CDN.DepotChunk.AdlerHash(chunkBuffer.AsSpan(0, chunkRead)) != match.OldChunk.Checksum)
                                 {
                                     neededChunks.Add(match.NewChunk);
                                 }
@@ -1288,6 +1336,8 @@ namespace DepotDownloader
 
             var written = 0;
             var chunkBuffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
+            const int maxChunkRetries = 10;
+            var retryCount = 0;
 
             try
             {
@@ -1324,7 +1374,7 @@ namespace DepotDownloader
                     }
                     catch (TaskCanceledException)
                     {
-                        Console.WriteLine("Connection timeout downloading chunk {0}", chunkID);
+                        Console.WriteLine("Connection timeout downloading chunk {0} (attempt {1}/{2})", chunkID, retryCount + 1, maxChunkRetries);
                         cdnPool.ReturnBrokenConnection(connection);
                     }
                     catch (SteamKitWebRequestException e)
@@ -1349,7 +1399,7 @@ namespace DepotDownloader
                             break;
                         }
 
-                        Console.WriteLine("Encountered {1} for chunk {0}. Retrying...", chunkID, e.StatusCode);
+                        Console.WriteLine("Encountered {1} for chunk {0} (attempt {2}/{3}). Retrying...", chunkID, e.StatusCode, retryCount + 1, maxChunkRetries);
                     }
                     catch (OperationCanceledException)
                     {
@@ -1358,8 +1408,16 @@ namespace DepotDownloader
                     catch (Exception e)
                     {
                         cdnPool.ReturnBrokenConnection(connection);
-                        Console.WriteLine("Error downloading chunk {0}: {1} Retrying...", chunkID, e.Message);
+                        Console.WriteLine("Error downloading chunk {0} (attempt {1}/{2}): {3} Retrying...", chunkID, retryCount + 1, maxChunkRetries, e.Message);
                     }
+
+                    if (++retryCount >= maxChunkRetries)
+                    {
+                        Console.WriteLine("Chunk {0} failed after {1} retries. Giving up.", chunkID, maxChunkRetries);
+                        break;
+                    }
+
+                    await Task.Delay(Math.Min(500 * retryCount, 10000), cts.Token).ConfigureAwait(false);
                 } while (written == 0);
 
                 if (written == 0)
@@ -1406,7 +1464,30 @@ namespace DepotDownloader
             if (remainingChunks == 0)
             {
                 var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-                Console.WriteLine("{0,6:#00.00}% {1}", (sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
+
+                double speedMBps = 0;
+                var eta = "";
+
+                lock (downloadCounter)
+                {
+                    var elapsedSeconds = downloadCounter.downloadStopwatch.Elapsed.TotalSeconds;
+                    if (elapsedSeconds > 0.5)
+                    {
+                        speedMBps = downloadCounter.totalBytesUncompressed / elapsedSeconds / (1024.0 * 1024.0);
+                        var remainingBytes = downloadCounter.completeDownloadSize > downloadCounter.totalBytesUncompressed
+                            ? downloadCounter.completeDownloadSize - downloadCounter.totalBytesUncompressed
+                            : 0;
+                        var etaSeconds = speedMBps > 0 ? remainingBytes / (speedMBps * 1024.0 * 1024.0) : 0;
+                        eta = etaSeconds > 0
+                            ? $" ETA {TimeSpan.FromSeconds(etaSeconds):mm\\:ss}"
+                            : "";
+                    }
+                }
+
+                Console.WriteLine("{0,6:#00.00}% {1}{2}",
+                    (sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f,
+                    fileFinalPath,
+                    speedMBps > 0 ? $" [{speedMBps:F1} MB/s{eta}]" : "");
             }
         }
 

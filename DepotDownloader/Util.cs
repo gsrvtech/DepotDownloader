@@ -87,8 +87,9 @@ namespace DepotDownloader
             {
                 fs.Seek((long)data.Offset, SeekOrigin.Begin);
 
-                var adler = AdlerHash(fs, (int)data.UncompressedLength);
-                if (!adler.SequenceEqual(BitConverter.GetBytes(data.Checksum)))
+                var buffer = new byte[data.UncompressedLength];
+                var read = fs.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+                if (SteamKit2.CDN.DepotChunk.AdlerHash(buffer.AsSpan(0, read)) != data.Checksum)
                 {
                     neededChunks.Add(data);
                 }
@@ -97,25 +98,7 @@ namespace DepotDownloader
             return neededChunks;
         }
 
-        public static byte[] AdlerHash(Stream stream, int length)
-        {
-            uint a = 0, b = 0;
-            var buffer = new byte[Math.Min(length, 65536)];
-            var remaining = length;
-            while (remaining > 0)
-            {
-                var toRead = Math.Min(remaining, buffer.Length);
-                var read = stream.Read(buffer, 0, toRead);
-                if (read == 0) break;
-                for (var i = 0; i < read; i++)
-                {
-                    a = (a + buffer[i]) % 65521;
-                    b = (b + a) % 65521;
-                }
-                remaining -= read;
-            }
-            return BitConverter.GetBytes(a | (b << 16));
-        }
+
 
         public static byte[] FileSHAHash(string filename)
         {
