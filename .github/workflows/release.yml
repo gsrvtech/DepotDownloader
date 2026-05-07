@@ -18,7 +18,22 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - name: Resolve ref
+        id: resolve
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          if [[ "$TAG" != v* ]]; then
+            TAG="v$TAG"
+          fi
+          echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: [prepare]
     name: Build ${{ matrix.artifact-name }}
     runs-on: ${{ matrix.runs-on }}
     permissions:
@@ -51,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - uses: actions/setup-dotnet@v5
 
@@ -65,6 +80,7 @@ jobs:
           if-no-files-found: error
 
   build-framework:
+    needs: [prepare]
     name: Build framework-dependent
     runs-on: ubuntu-latest
     permissions:
@@ -72,7 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - uses: actions/setup-dotnet@v5
 
@@ -86,19 +102,19 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [build, build-framework]
+    needs: [prepare, build, build-framework]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Extract release notes from CHANGELOG
         id: changelog
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ needs.prepare.outputs.ref }}"
           VERSION="${TAG#v}"
           notes=$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
           echo "notes<<EOF" >> "$GITHUB_OUTPUT"
@@ -130,8 +146,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          name: DepotDownloader ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.prepare.outputs.ref }}
+          name: DepotDownloader ${{ needs.prepare.outputs.ref }}
           body: ${{ steps.changelog.outputs.notes }}
           draft: true
           prerelease: ${{ inputs.prerelease == true }}

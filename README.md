@@ -1,5 +1,7 @@
-DepotDownloader
-===============
+DepotDownloader (Custom Fork)
+=============================
+
+> **Note:** This is a custom fork of [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader) maintained primarily for use with personal [Pelican Panel](https://pelican.dev) eggs. It contains bug fixes and optimizations beyond the upstream release and is kept in sync with patches from the original project.
 
 Steam depot downloader utilizing the SteamKit2 library. Supports .NET 8.0
 

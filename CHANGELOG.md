@@ -1,11 +1,13 @@
 # Changelog
 
+> **Note:** This is a custom fork of [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader), hosted at [gsrvtech/DepotDownloader](https://github.com/gsrvtech/DepotDownloader), maintained primarily for use with personal [Pelican Panel](https://pelican.dev) eggs. It contains bug fixes and optimizations beyond the upstream release and is kept in sync with patches from the original project.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.5.0]
 
 ### Security
 
